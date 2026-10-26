@@ -7,6 +7,7 @@ import zai from "../assets/brands/zai.svg";
 import minimax from "../assets/brands/minimax.svg";
 import antigravity from "../assets/brands/antigravity.svg";
 import opencode from "../assets/brands/opencode.svg";
+import deepseek from "../assets/brands/deepseek.svg";
 const marks: Record<string, string> = {
   "claude-code": claude,
   grok,
@@ -15,6 +16,7 @@ const marks: Record<string, string> = {
   minimax,
   antigravity,
   opencode,
+  deepseek,
 };
 export function ProviderMark({ plugin }: { plugin: string }) {
   if (plugin === "chatgpt") return <ChatGPTMark />;

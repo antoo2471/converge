@@ -93,6 +93,7 @@ export const importedWorkspace = z.object({
           "zai",
           "claude-code",
           "opencode",
+          "deepseek",
           "grok",
           "minimax",
           "kimi",
@@ -111,6 +112,9 @@ export const importedWorkspace = z.object({
         request: z
           .object({
             zai: z
+              .object({ authMode: z.enum(["oauth", "api-key"]) })
+              .optional(),
+            deepseek: z
               .object({ authMode: z.enum(["oauth", "api-key"]) })
               .optional(),
             cli: z

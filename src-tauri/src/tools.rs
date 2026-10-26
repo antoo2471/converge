@@ -51,6 +51,19 @@ pub async fn open_external(app: tauri::AppHandle, url: String) -> Result<(), Str
     {
         return Ok(());
     }
+    open_browser(&url)
+}
+/// Only internal callers may skip the general link confirmation. OAuth callers
+/// must bind the URL to an explicit pending login before reaching this helper.
+pub(crate) fn open_browser(url: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(url).map_err(|_| "Lien invalide")?;
+    if !["https", "http"].contains(&parsed.scheme())
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || url.len() > 8192
+    {
+        return Err("Lien web refusé".into());
+    }
     #[cfg(windows)]
     {
         use windows_sys::Win32::{
@@ -91,6 +104,11 @@ pub async fn open_external(app: tauri::AppHandle, url: String) -> Result<(), Str
 
 pub fn schemas() -> Vec<(String, String, Value)> {
     let definitions = [
+        ("skills.read", "Read an enabled skill's SKILL.md or a relative text resource", vec![("skillId", "string"), ("path", "string")]),
+        ("mcp.list", "Discover tools, resources and prompts from an enabled MCP connection", vec![("serverId", "string")]),
+        ("mcp.call", "Call a discovered MCP tool after approval", vec![("serverId", "string"), ("toolName", "string"), ("arguments", "object")]),
+        ("mcp.read", "Read a resource from an enabled MCP server", vec![("serverId", "string"), ("uri", "string")]),
+        ("mcp.prompt", "Get a prompt from an enabled MCP server", vec![("serverId", "string"), ("name", "string"), ("arguments", "object")]),
         (
             "filesystem.read",
             "Read a UTF-8 file within the approved root",
@@ -122,7 +140,7 @@ pub fn schemas() -> Vec<(String, String, Value)> {
         ),
         (
             "terminal.execute",
-            "Run PowerShell (or cmd) in a Windows AppContainer, network denied. Read-only by default on the approved folder; use readOnly:false for a writable disposable copy.",
+            "Run a command in the OS sandbox (Windows AppContainer, Linux bubblewrap, macOS Seatbelt), network denied. Read-only by default on the approved folder; use readOnly:false for a writable disposable copy.",
             vec![("command", "string")],
         ),
         (
@@ -187,7 +205,7 @@ pub fn schemas() -> Vec<(String, String, Value)> {
             properties.insert("actions".into(),json!({"type":"array","minItems":1,"maxItems":12,"items":{"type":"object","properties":{"type":{"type":"string","enum":["click","double_click","move","drag","type","key","scroll","wait"]},"x":{"type":"number"},"y":{"type":"number"},"button":{"type":"string","enum":["left","right","middle"]},"path":{"type":"array","minItems":2,"maxItems":100,"items":{"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":false}},"text":{"type":"string"},"key":{"type":"string"},"amount":{"type":"number"},"milliseconds":{"type":"integer","minimum":1,"maximum":2000},"frameId":{"type":"string"}},"required":["type"],"additionalProperties":false}}));
         }
         if name == "web.search" || name == "web.images" { properties.insert("endpoint".into(),json!({"type":"string","description":"Optional configured SearXNG URL. Omit for built-in search. Never invent a server."})); }
-        if name == "terminal.execute" { properties.insert("readOnly".into(),json!({"type":"boolean","description":"Default true: read the approved live workspace without copying it; writes are denied by Windows. False: execute in a disposable writable snapshot."})); properties.insert("shell".into(),json!({"type":"string","enum":["auto","powershell","cmd"],"description":"Default auto: native CLI commands use cmd for low startup latency; PowerShell syntax uses powershell. Explicit selection is respected."})); properties.insert("cwd".into(),json!({"type":"string","description":"Working subdirectory inside the workspace. Use the project subfolder to avoid copying unrelated files."})); properties.insert("applyChanges".into(),json!({"type":"boolean","description":"Ask Converge to apply changes from the isolated copy after the command."})); }
+        if name == "terminal.execute" { properties.insert("readOnly".into(),json!({"type":"boolean","description":"Default true: read the approved live workspace without copying it; writes are denied by Windows. False: execute in a disposable writable snapshot."})); properties.insert("shell".into(),json!({"type":"string","enum":if cfg!(windows) { vec!["auto","powershell","cmd"] } else { vec!["auto","sh","bash","zsh"] },"description":"Default auto: native CLI commands use cmd for low startup latency; PowerShell syntax uses powershell. Explicit selection is respected."})); properties.insert("cwd".into(),json!({"type":"string","description":"Working subdirectory inside the workspace. Use the project subfolder to avoid copying unrelated files."})); properties.insert("applyChanges".into(),json!({"type":"boolean","description":"Ask Converge to apply changes from the isolated copy after the command."})); }
         (name.replace('.',"_"),description.to_string(),json!({"type":"object","properties":properties,"required":fields.iter().map(|f|f.0).collect::<Vec<_>>(),"additionalProperties":false}))
     }).collect()
 }
@@ -252,6 +270,9 @@ pub(crate) async fn execute_inner(
             .ok_or_else(|| format!("Argument manquant : {key}"))
     };
     match name {
+        "skills.read" | "mcp.list" | "mcp.call" | "mcp.read" | "mcp.prompt" => {
+            crate::extensions::execute(app, state, name, args).await
+        }
         "filesystem.read" | "filesystem.write" | "filesystem.list" | "coding.search"
         | "coding.patch" => {
             let root = approved_root
@@ -315,6 +336,7 @@ pub(crate) async fn execute_inner(
                 ))
                 .cloned()
                 .unwrap_or_default();
+            crate::desktop_control::begin(app, &cid, token.clone())?;
             let app = app.clone();
             tauri::async_runtime::spawn_blocking(move || {
                 use tauri::Manager;

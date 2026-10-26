@@ -18,12 +18,14 @@ use tokio_util::sync::CancellationToken;
 pub struct CliProviders {
     root: PathBuf,
     logins: Mutex<HashMap<String, std::process::Child>>,
+    sessions: crate::cli_sessions::Sessions,
 }
 impl CliProviders {
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
             logins: Default::default(),
+            sessions: Default::default(),
         }
     }
 }
@@ -49,6 +51,7 @@ pub async fn remove(app: &tauri::AppHandle, p: &Provider) -> Result<(), String> 
         let _ = child.kill();
         let _ = child.wait();
     }
+    runtime.sessions.remove(&p.id).await;
     // Delete only this connection's private client profile.
     let home = runtime.root.join(&p.id);
     if home.exists() {
@@ -145,6 +148,9 @@ fn resolve(p: &Provider) -> Result<Program, String> {
             }
         }
     }
+    resolve_candidates(name, candidates)
+}
+fn resolve_candidates(name: &str, candidates: Vec<PathBuf>) -> Result<Program, String> {
     for path in candidates {
         // npm's .cmd wrapper is not a shell transport. Resolve its declared JS entry
         // and run Node directly, so messages/models can never become shell syntax.
@@ -190,6 +196,9 @@ fn resolve(p: &Provider) -> Result<Program, String> {
             }
         }
         if path.is_file()
+            // npm also installs an extensionless POSIX shell shim on Windows.
+            // It is not a Win32 executable; continue to the package/Node entry.
+            && (!cfg!(windows) || path.extension().is_some_and(|s| s.eq_ignore_ascii_case("exe")))
             && !path
                 .extension()
                 .is_some_and(|s| s == "cmd" || s == "bat" || s == "ps1")
@@ -298,8 +307,9 @@ fn environment(command: &mut std::process::Command, p: &Provider, home: &Path) {
         command.env_remove(key);
     }
     command.env("NO_COLOR", "1");
+    command.env("PATH", crate::host_environment::path_value());
 }
-fn command(p: &Provider, home: &Path) -> Result<Command, String> {
+pub(crate) fn command(p: &Provider, home: &Path) -> Result<Command, String> {
     let program = resolve(p)?;
     let mut command = std::process::Command::new(program.executable);
     command.args(program.prefix);
@@ -404,9 +414,12 @@ pub async fn cli_provider_action(
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x00000010);
         }
-        let child = cmd
-            .spawn()
-            .map_err(|_| "Impossible d’ouvrir la connexion du client officiel")?;
+        let child = cmd.spawn().map_err(|e| {
+            format!(
+                "Impossible d’ouvrir la connexion du client officiel (code système {}).",
+                e.raw_os_error().unwrap_or(0)
+            )
+        })?;
         logins.insert(provider.id.clone(), child);
         return Ok(json!({"available":true,"login":"running"}));
     }
@@ -499,14 +512,14 @@ pub async fn discover(app: &tauri::AppHandle, p: &Provider) -> Result<Vec<String
     }
     Ok(models)
 }
-fn transcript(messages: &[Value]) -> String {
+pub(crate) fn transcript(messages: &[Value]) -> String {
     let messages: Vec<Value> = messages
         .iter()
         .map(|m| json!({"role":m["role"],"content":m["content"]}))
         .collect();
     format!("Respond to the final user request in this Converge conversation. The system entries contain the Converge instructions and tool protocol. Use only that protocol for tools; Converge executes them. Conversation:\n{}",serde_json::to_string(&messages).unwrap_or_default())
 }
-fn image_blocks(messages: &[Value]) -> Vec<Value> {
+pub(crate) fn image_blocks(messages: &[Value]) -> Vec<Value> {
     messages
         .iter()
         .flat_map(|m| m["attachments"].as_array().into_iter().flatten())
@@ -526,11 +539,11 @@ fn image_blocks(messages: &[Value]) -> Vec<Value> {
 /// Parser shared by the Claude/Grok Anthropic wire stream and the other CLI
 /// envelopes. Completed messages are a fallback only, never duplicated deltas.
 #[derive(Default)]
-struct Output {
-    done: bool,
-    text: String,
-    partial: bool,
-    native_tools_denied: bool,
+pub(crate) struct Output {
+    pub(crate) done: bool,
+    pub(crate) text: String,
+    pub(crate) partial: bool,
+    pub(crate) native_tools_denied: bool,
 }
 fn client_error(plugin: &str, value: &Value) -> String {
     // Inspect only bounded error data and return fixed copy; never expose a
@@ -589,7 +602,7 @@ fn client_error(plugin: &str, value: &Value) -> String {
     "Le client officiel a signalé une erreur. Vérifiez le compte, le modèle et le quota dans son application.".into()
 }
 impl Output {
-    fn ingest(&mut self, plugin: &str, v: &Value) -> Result<Vec<Value>, String> {
+    pub(crate) fn ingest(&mut self, plugin: &str, v: &Value) -> Result<Vec<Value>, String> {
         if plugin == "grok"
             && v["type"] == "system"
             && v["subtype"] == "init"
@@ -693,6 +706,9 @@ pub async fn stream(
         || r.messages.len() > 500
     {
         return Err("Requête du client officiel invalide".into());
+    }
+    if matches!(p.plugin.as_str(), "antigravity" | "claude-code") {
+        return runtime.sessions.stream(p, r, channel, cancel, &home).await;
     }
     let cwd = home.join("requests").join(&r.id);
     std::fs::create_dir_all(&cwd).map_err(|_| "Dossier de requête indisponible")?;
@@ -1166,6 +1182,22 @@ let input=''; process.stdin.on('data', d=>input+=d); process.stdin.on('end',()=>
             .filter_map(|v| v["text"].as_str())
             .collect::<String>();
         assert_eq!(text, "Été 🐈");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    #[cfg(windows)]
+    fn npm_shell_shim_is_skipped_before_node_package() {
+        let (root, _, _, _, _) = mmx_fixture("process.exit(0)");
+        let shim = root.join("mmx");
+        std::fs::write(&shim, "#!/bin/sh\nexit 1").unwrap();
+        let program = resolve_candidates("mmx", vec![shim, root.clone()]).unwrap();
+        assert_eq!(program.executable.file_name().unwrap(), "node.exe");
+        assert_eq!(program.prefix.len(), 1);
+        let output = std::process::Command::new(&program.executable)
+            .args(&program.prefix)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
         std::fs::remove_dir_all(root).unwrap();
     }
     #[tokio::test]

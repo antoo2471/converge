@@ -57,22 +57,28 @@ for (const [id, preset] of Object.entries(providerPresets)) {
       version: "1.0.0",
       description: preset.description,
       catalogue: {
-        category: cli || id === "zai" ? "accounts" : "api",
+        category: cli || id === "zai" || id === "deepseek" ? "accounts" : "api",
         summary: preset.description,
         features: cli
           ? ["Connexion OAuth", "Client officiel", "Outils Converge"]
           : id === "zai"
             ? ["Connexion OAuth", "Coding Plan", "Clé API"]
-            : ["Clé API", "Go / Zen", "Streaming"],
+            : id === "deepseek"
+              ? ["Connexion de compte", "Clé API", "Streaming"]
+              : ["Clé API", "Go / Zen", "Streaming"],
       },
       modes: [
         {
           id: cli ? "account" : "api",
           name: cli ? "Compte" : "API",
-          protocols: cli ? ["cli"] : ["openai", "anthropic", "responses"],
+          protocols: cli
+            ? ["cli"]
+            : id === "deepseek"
+              ? ["openai", "anthropic"]
+              : ["openai", "anthropic", "responses"],
           authentication: cli
             ? ["oauth"]
-            : id === "zai"
+            : id === "zai" || id === "deepseek"
               ? ["oauth", "api-key"]
               : ["api-key"],
           capabilities: ["vision", "tools", "context"],
@@ -81,7 +87,12 @@ for (const [id, preset] of Object.entries(providerPresets)) {
     },
     defaults: () => newPresetProvider(id as keyof typeof providerPresets),
     supports: (p) =>
-      cli ? p === "cli" : ["openai", "anthropic", "responses"].includes(p),
+      cli
+        ? p === "cli"
+        : (id === "deepseek"
+            ? ["openai", "anthropic"]
+            : ["openai", "anthropic", "responses"]
+          ).includes(p),
   });
 }
 providerRegistry.register({

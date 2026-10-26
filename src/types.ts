@@ -12,6 +12,7 @@ export type ProviderPluginId =
   | "zai"
   | "claude-code"
   | "opencode"
+  | "deepseek"
   | "grok"
   | "minimax"
   | "kimi";
@@ -25,6 +26,7 @@ export interface Capabilities {
 export interface Provider {
   request?: {
     zai?: { authMode: "oauth" | "api-key" };
+    deepseek?: { authMode: "oauth" | "api-key" };
     cli?: { executable?: string };
     chatPath?: string;
     modelsPath?: string;
@@ -124,7 +126,7 @@ export interface ImageRecord {
 }
 export interface Settings {
   reasoningEfforts?: Record<string, ReasoningEffort>;
-  toolDefaultsVersion?: 1 | 2;
+  toolDefaultsVersion?: 1 | 2 | 3;
   responsePreset?: ResponsePreset;
   appearance?: Appearance;
   theme: "dark" | "light" | "system";
@@ -161,7 +163,7 @@ export const defaults: Workspace = {
     generativeUI: true,
     searchUrl: "",
     enabledTools: [...allTools],
-    toolDefaultsVersion: 2,
+    toolDefaultsVersion: 3,
     imageTarget: "",
     sidebarWidth: 248,
   },

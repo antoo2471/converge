@@ -10,6 +10,7 @@ it("ships authorized plugins and starts without models", () => {
     "kimi",
     "zai",
     "opencode",
+    "deepseek",
     "chatgpt",
     "local",
     "custom",

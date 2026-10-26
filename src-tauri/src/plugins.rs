@@ -93,7 +93,11 @@ pub fn registry() -> Vec<PluginManifest> {
             }],
         });
     }
-    for (id, name) in [("zai", "Z.ai · GLM"), ("opencode", "OpenCode Go / Zen")] {
+    for (id, name) in [
+        ("zai", "Z.ai · GLM"),
+        ("opencode", "OpenCode Go / Zen"),
+        ("deepseek", "DeepSeek"),
+    ] {
         plugins.push(PluginManifest {
             schema_version: 1,
             id,
@@ -102,8 +106,12 @@ pub fn registry() -> Vec<PluginManifest> {
             modes: vec![PluginMode {
                 id: "api",
                 name: "API",
-                protocols: vec!["openai", "anthropic", "responses"],
-                authentication: if id == "zai" {
+                protocols: if id == "deepseek" {
+                    vec!["openai", "anthropic"]
+                } else {
+                    vec!["openai", "anthropic", "responses"]
+                },
+                authentication: if id == "zai" || id == "deepseek" {
                     vec!["oauth", "api-key"]
                 } else {
                     vec!["api-key"]

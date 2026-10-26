@@ -304,6 +304,9 @@ pub async fn execute_agent_tool(
         new_workspace,
     };
     let result = async {
+        if name.starts_with("computer.") {
+            crate::desktop_control::attach(&app, &context.conversation, token.clone());
+        }
         let root = authorize(&state, &context, &name, &args).await?;
         if token.is_cancelled() { return Err("CANCELLED: Action annulée".into()); }
         on_output.send(json!({"type":"started"})).map_err(|e|e.to_string())?;

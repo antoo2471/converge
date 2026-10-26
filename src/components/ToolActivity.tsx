@@ -34,10 +34,14 @@ export function ToolActivity({
   onError: (error: unknown) => void;
   onCancel?: () => void;
 }) {
-  const [selection, setSelection] = useState<{ permissionId: string; path: string }>();
-  const root = selection?.permissionId === permission?.id
-    ? selection?.path || permission?.root || null
-    : permission?.root || null;
+  const [selection, setSelection] = useState<{
+    permissionId: string;
+    path: string;
+  }>();
+  const root =
+    selection?.permissionId === permission?.id
+      ? selection?.path || permission?.root || null
+      : permission?.root || null;
   const [busy, setBusy] = useState(false);
   const active =
     call.status === "preparing" ||
@@ -45,12 +49,33 @@ export function ToolActivity({
     call.status === "awaiting";
   const args = permission?.args || call.args;
   const observation = toolObservation(call.result);
-  let searchResult: { engine: string; results: { title: string; url: string }[]; warnings?: string[] } | undefined;
+  let searchResult:
+    | {
+        engine: string;
+        results: { title: string; url: string }[];
+        warnings?: string[];
+      }
+    | undefined;
   if (call.name === "web.search" || call.name === "web.images") {
-    try { const value = JSON.parse(call.result || ""); if (typeof value.engine === "string" && Array.isArray(value.results)) searchResult = value; } catch { /* Failed search output remains visible below. */ }
+    try {
+      const value = JSON.parse(call.result || "");
+      if (typeof value.engine === "string" && Array.isArray(value.results))
+        searchResult = value;
+    } catch {
+      /* Failed search output remains visible below. */
+    }
   }
   const target = String(
-    args.path || args.command || args.url || args.query || "",
+    args.path ||
+      args.command ||
+      args.url ||
+      args.query ||
+      (call.name.startsWith("mcp.")
+        ? [args.toolName || args.name || args.uri || "", args.serverId]
+            .filter(Boolean)
+            .join(" · ")
+        : args.skillId) ||
+      "",
   );
   const status = {
     preparing: "Rédaction…",
@@ -166,12 +191,13 @@ export function ToolActivity({
       )}
       {permission && (
         <div className="agent-tool-approval">
-          {call.name.startsWith("computer.") && call.name !== "computer.windows" && (
-            <p>
-              Cette capture de votre écran sera transmise au modèle de la
-              conversation.
-            </p>
-          )}
+          {call.name.startsWith("computer.") &&
+            call.name !== "computer.windows" && (
+              <p>
+                Cette capture de votre écran sera transmise au modèle de la
+                conversation.
+              </p>
+            )}
           {permission.addWorkspace && (
             <p>
               Autoriser l’IA à travailler à cet emplacement l’ajoutera aux
@@ -193,7 +219,11 @@ export function ToolActivity({
                     const choice = await api.pickWorkspace(
                       permission.conversationId,
                     );
-                    if (choice.selected) setSelection({ permissionId: permission.id, path: choice.selected });
+                    if (choice.selected)
+                      setSelection({
+                        permissionId: permission.id,
+                        path: choice.selected,
+                      });
                   } catch (error) {
                     onError(error);
                   }
@@ -259,13 +289,31 @@ export function ToolActivity({
       {call.result &&
         (searchResult ? (
           <div className="agent-web-results">
-            <small>{searchResult.engine} · {searchResult.results.length} résultat(s)</small>
+            <small>
+              {searchResult.engine} · {searchResult.results.length} résultat(s)
+            </small>
             {searchResult.results.slice(0, 5).map((item, index) => (
-              <button className="text-button" key={`${item.url}-${index}`} type="button" onClick={() => void api.openExternal(item.url).catch(onError)}>
-                <span>{item.title || item.url}</span><small>{(() => { try { return new URL(item.url).hostname; } catch { return ""; } })()}</small>
+              <button
+                className="text-button"
+                key={`${item.url}-${index}`}
+                type="button"
+                onClick={() => void api.openExternal(item.url).catch(onError)}
+              >
+                <span>{item.title || item.url}</span>
+                <small>
+                  {(() => {
+                    try {
+                      return new URL(item.url).hostname;
+                    } catch {
+                      return "";
+                    }
+                  })()}
+                </small>
               </button>
             ))}
-            {searchResult.warnings?.map((warning, i) => <small key={i}>{warning}</small>)}
+            {searchResult.warnings?.map((warning, i) => (
+              <small key={i}>{warning}</small>
+            ))}
           </div>
         ) : observation.image ? (
           <img

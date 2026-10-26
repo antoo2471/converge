@@ -16,7 +16,7 @@ import {
 } from "../core/providerPresets";
 import * as api from "../lib/native";
 import { useAppDialogs } from "./AppDialogs";
-import { ZaiOAuthConnection } from "./ZaiOAuthConnection";
+import { AccountOAuthConnection } from "./AccountOAuthConnection";
 
 export function AccountProviderEditor({
   plugin,
@@ -39,9 +39,10 @@ export function AccountProviderEditor({
   const [notice, setNotice] = useState("");
   const [models, setModels] = useState(provider.models.join("\n"));
   const [verified, setVerified] = useState(false);
-  const [zaiConnected, setZaiConnected] = useState(false);
-  const oauthZai =
-    plugin === "zai" && provider.request?.zai?.authMode === "oauth";
+  const [accountConnected, setAccountConnected] = useState(false);
+  const oauthAccount =
+    (plugin === "zai" && provider.request?.zai?.authMode === "oauth") ||
+    (plugin === "deepseek" && provider.request?.deepseek?.authMode === "oauth");
   const alive = useRef(true),
     revision = useRef(0);
   const { askConfirm } = useAppDialogs();
@@ -149,7 +150,7 @@ export function AccountProviderEditor({
     try {
       const result = await api.discover(
         provider,
-        oauthZai ? undefined : key || undefined,
+        oauthAccount ? undefined : key || undefined,
       );
       if (!alive.current || version !== revision.current) return;
       const selected = [...new Set([...provider.models, ...result])];
@@ -183,7 +184,7 @@ export function AccountProviderEditor({
             ),
           ],
         },
-        oauthZai ? undefined : key || undefined,
+        oauthAccount ? undefined : key || undefined,
       );
     } catch (e) {
       if (alive.current) setError(String(e));
@@ -206,35 +207,59 @@ export function AccountProviderEditor({
           <p>{preset.description}</p>
         </div>
       </div>
-      {plugin === "zai" && (
+      {(plugin === "zai" || plugin === "deepseek") && (
         <div
           className="account-provider-services"
           role="group"
-          aria-label="Connexion Z.ai"
+          aria-label={`Connexion ${preset.name}`}
         >
           <button
-            className={`button ${oauthZai ? "primary" : ""}`}
-            aria-pressed={oauthZai}
+            className={`button ${oauthAccount ? "primary" : ""}`}
+            aria-pressed={oauthAccount}
             disabled={!!busy}
             onClick={() => {
-              setZaiConnected(false);
+              setAccountConnected(false);
               patch({
-                protocol: "openai",
-                url: "https://api.z.ai/api/coding/paas/v4",
-                request: { ...provider.request, zai: { authMode: "oauth" } },
+                ...(plugin === "deepseek"
+                  ? {
+                      protocol: "anthropic",
+                      url: "https://api.deepseek.com",
+                      request: {
+                        deepseek: { authMode: "oauth" },
+                        chatPath: "anthropic/v1/messages",
+                      },
+                    }
+                  : {
+                      protocol: "openai",
+                      url: "https://api.z.ai/api/coding/paas/v4",
+                      request: {
+                        ...provider.request,
+                        zai: { authMode: "oauth" },
+                      },
+                    }),
               });
             }}
           >
-            Compte Coding Plan
+            {plugin === "deepseek" ? "Compte DeepSeek" : "Compte Coding Plan"}
           </button>
           <button
-            className={`button ${!oauthZai ? "primary" : ""}`}
-            aria-pressed={!oauthZai}
+            className={`button ${!oauthAccount ? "primary" : ""}`}
+            aria-pressed={!oauthAccount}
             disabled={!!busy}
             onClick={() => {
-              setZaiConnected(false);
+              setAccountConnected(false);
               patch({
-                request: { ...provider.request, zai: { authMode: "api-key" } },
+                ...(plugin === "deepseek"
+                  ? {
+                      protocol: "openai",
+                      request: { deepseek: { authMode: "api-key" } },
+                    }
+                  : {
+                      request: {
+                        ...provider.request,
+                        zai: { authMode: "api-key" },
+                      },
+                    }),
               });
             }}
           >
@@ -242,10 +267,10 @@ export function AccountProviderEditor({
           </button>
         </div>
       )}
-      {oauthZai ? (
-        <ZaiOAuthConnection
+      {oauthAccount ? (
+        <AccountOAuthConnection
           provider={provider}
-          onConnectionChange={setZaiConnected}
+          onConnectionChange={setAccountConnected}
         />
       ) : cli ? (
         <section className="editor-section">
@@ -454,7 +479,7 @@ export function AccountProviderEditor({
             Gemini ou Chat Completions.
           </p>
         )}
-        {!cli && !oauthZai && (
+        {!cli && !oauthAccount && plugin !== "deepseek" && (
           <label className="field">
             Format par défaut
             <select
@@ -521,8 +546,8 @@ export function AccountProviderEditor({
             !provider.name.trim() ||
             !models.trim() ||
             (cli && (!status?.available || status.login === "running")) ||
-            (oauthZai && !zaiConnected) ||
-            (!cli && !oauthZai && !existing && !key.trim())
+            (oauthAccount && !accountConnected) ||
+            (!cli && !oauthAccount && !existing && !key.trim())
           }
           onClick={() => void save()}
         >

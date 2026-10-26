@@ -1,3 +1,5 @@
+import { UpdateSettings } from "./AppUpdates";
+import appManifest from "../../package.json";
 import { ToolSettings } from "./ToolSettings";
 import { ResponseSettings } from "./ResponseSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
@@ -23,6 +25,7 @@ export function Settings({
   onImport,
   onError,
   onClose,
+  busy = false,
 }: {
   settings: Config;
   onChange: (s: Config) => void;
@@ -30,10 +33,17 @@ export function Settings({
   onImport: () => void;
   onError: (e: unknown) => void;
   onClose?: () => void;
+  busy?: boolean;
 }) {
   const [section, setSection] = useState("appearance"),
     [query, setQuery] = useState("");
   const sections = [
+    {
+      id: "updates",
+      label: "Mises à jour",
+      group: "Application",
+      icon: Download,
+    },
     { id: "appearance", label: "Apparence", group: "Interface", icon: Sun },
     {
       id: "generation",
@@ -113,6 +123,7 @@ export function Settings({
             <p>
               {
                 {
+                  updates: "Gardez Converge à jour depuis le dépôt officiel.",
                   appearance:
                     "Faites de Converge un espace qui vous ressemble.",
                   generation:
@@ -177,8 +188,9 @@ export function Settings({
             </button>
           </div>
         </section>
+        {section === "updates" && <UpdateSettings busy={busy} />}
         <footer className="settings-footer">
-          Converge 0.1.0 · Every AI. One space.
+          Converge {appManifest.version} · Every AI. One space.
         </footer>
       </div>
     </div>

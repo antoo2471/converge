@@ -14,7 +14,7 @@ it("enables all existing tools once, preserving subsequent user opt-outs", () =>
   };
   const migrated = migrateToolDefaults(old);
   expect(migrated.enabledTools).toEqual(allTools);
-  expect(allTools).toHaveLength(17);
+  expect(allTools).toHaveLength(22);
   expect(new Set(allTools).size).toBe(allTools.length);
   const disabled = { ...migrated, enabledTools: [] };
   expect(

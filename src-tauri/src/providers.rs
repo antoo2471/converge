@@ -10,6 +10,7 @@ use tauri::{ipc::Channel, State};
 
 pub fn validate(p: &Provider) -> Result<(), String> {
     crate::zai::validate(p)?;
+    crate::deepseek::validate(p)?;
     if crate::cli_providers::supports(&p.plugin) {
         return crate::cli_providers::validate(p);
     }
@@ -113,6 +114,13 @@ fn auth(
     p: &Provider,
     s: &Secret,
 ) -> Result<reqwest::RequestBuilder, String> {
+    if crate::deepseek::oauth(p) {
+        crate::deepseek::validate(p)?;
+        return Ok(r
+            .header("x-dsh-auth-token", &s.key)
+            .header("anthropic-version", "2023-06-01")
+            .header("User-Agent", "Converge/0.1.0"));
+    }
     for (k, v) in s.headers.iter().chain(p.headers.iter()) {
         let name = reqwest::header::HeaderName::from_bytes(k.as_bytes())
             .map_err(|_| "Nom de header invalide")?;
@@ -179,6 +187,15 @@ async fn checked_provider(
     response: reqwest::Response,
     p: &Provider,
 ) -> Result<reqwest::Response, String> {
+    if p.plugin == "deepseek" && !response.status().is_success() {
+        let status = response.status().as_u16();
+        return Err(match status {
+            401 if crate::deepseek::oauth(p) => "La connexion DeepSeek a expiré ou a été refusée. Reconnectez le compte dans les fournisseurs.".into(),
+            402 => "Le solde ou le quota DeepSeek est insuffisant. Vérifiez votre compte sur la plateforme DeepSeek.".into(),
+            429 => "DeepSeek limite temporairement les requêtes. Réessayez dans un instant.".into(),
+            _ => format!("DeepSeek a renvoyé HTTP {status}. Vérifiez les droits de votre compte et le modèle sélectionné."),
+        });
+    }
     if p.plugin != "opencode" || response.status().is_success() {
         return checked(response).await;
     }
@@ -218,10 +235,15 @@ async fn discover_inner(
     validate(&provider)?;
     let mut s = if crate::zai::oauth(&provider) {
         crate::zai::credentials(&provider)?
+    } else if crate::deepseek::oauth(&provider) {
+        crate::deepseek::credentials(&provider)?
     } else {
         secret(&provider.id)?
     };
     if let Some(key) = key {
+        if crate::deepseek::oauth(&provider) {
+            return Err("Le compte DeepSeek n’utilise pas de clé API manuelle".into());
+        }
         s.key = key;
     }
     let default_path = match provider.protocol.as_str() {
@@ -443,6 +465,11 @@ pub async fn stream_chat(
     request: Request,
     on_event: Channel<Value>,
 ) -> Result<(), String> {
+    let _desktop_run = crate::desktop_control::track_run(
+        &app,
+        request.conversation_id.as_deref(),
+        format!("{}:{}", request.provider_id, request.id),
+    );
     let p = provider(&state, &request.provider_id)?;
     if p.plugin == "chatgpt" || p.protocol == "cli" {
         validate(&p)?;
@@ -519,7 +546,7 @@ async fn stream_chat_inner(
         requests.insert(request_key.clone(), token.clone());
     }
     let result=async {
-        let s=if crate::zai::oauth(&p){crate::zai::credentials(&p)?}else{secret(&p.id)?};
+        let s=if crate::zai::oauth(&p){crate::zai::credentials(&p)?}else if crate::deepseek::oauth(&p){crate::deepseek::credentials(&p)?}else{secret(&p.id)?};
         let messages=normalized(&request.messages,&p.protocol);
         let (path,mut body)=match p.protocol.as_str(){
             "ollama"=>("api/chat",json!({"model":request.model,"messages":messages,"stream":true,"options":{"temperature":request.temperature,"num_predict":request.max_tokens}})),
@@ -894,6 +921,28 @@ fn interpolate_workflow(value: &mut Value, variables: &Value, depth: u8) -> Resu
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn deepseek_account_uses_its_own_header_without_api_key_fallback() {
+        let p: super::Provider = serde_json::from_value(serde_json::json!({"id":uuid::Uuid::new_v4().to_string(),"name":"DeepSeek","plugin":"deepseek","protocol":"anthropic","url":"https://api.deepseek.com","headers":{},"models":[],"enabled":true,"capabilities":{},"request":{"deepseek":{"authMode":"oauth"},"chatPath":"anthropic/v1/messages"}})).unwrap();
+        let secret = super::Secret {
+            key: "owned-account-token".into(),
+            headers: std::collections::HashMap::from([(
+                "Authorization".into(),
+                "unrelated-api-key".into(),
+            )]),
+        };
+        let request = super::auth(
+            reqwest::Client::new().post("https://api.deepseek.com/anthropic/v1/messages"),
+            &p,
+            &secret,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        assert_eq!(request.headers()["x-dsh-auth-token"], "owned-account-token");
+        assert!(!request.headers().contains_key("Authorization"));
+        assert!(!request.headers().contains_key("x-api-key"));
+    }
     #[test]
     fn opencode_errors_do_not_blame_keys_for_plan_or_free_tier_limits() {
         assert!(opencode_error(

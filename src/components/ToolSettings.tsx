@@ -4,6 +4,7 @@ import {
   Globe,
   MousePointer2,
   ShieldCheck,
+  Puzzle,
 } from "lucide-react";
 import type { Settings } from "../types";
 import { allTools, toolGroups, setTools } from "../core/toolPreferences";
@@ -22,9 +23,10 @@ export function ToolSettings({
     terminal: Terminal,
     web: Globe,
     computer: MousePointer2,
+    extensions: Puzzle,
   };
   const update = (enabledTools: string[]) =>
-    onChange({ ...settings, toolDefaultsVersion: 2, enabledTools });
+    onChange({ ...settings, toolDefaultsVersion: 3, enabledTools });
   return (
     <div className="tools-simple">
       <div className="tools-safety-note">

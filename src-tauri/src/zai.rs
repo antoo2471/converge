@@ -138,7 +138,7 @@ async fn call(
     }
     Ok(envelope.get("data").cloned().unwrap_or(envelope))
 }
-fn authorize_url(raw: &str, callback: &str) -> Result<String, String> {
+fn authorize_url(raw: &str) -> Result<String, String> {
     let mut url = url::Url::parse(raw).map_err(|_| "Page d’autorisation Z.ai invalide")?;
     if url.scheme() != "https"
         || !url.username().is_empty()
@@ -155,9 +155,10 @@ fn authorize_url(raw: &str, callback: &str) -> Result<String, String> {
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
         .collect();
     url.set_query(None);
-    url.query_pairs_mut()
-        .extend_pairs(pairs)
-        .append_pair("redirect_uri", callback);
+    url.query_pairs_mut().extend_pairs(pairs).append_pair(
+        "redirect_uri",
+        &format!("{SITE}/api/v1/oauth/cli/callback/zai"),
+    );
     Ok(url.into())
 }
 fn personal_project(info: &Value) -> Result<(String, String), String> {
@@ -354,30 +355,12 @@ pub async fn zai_auth_action(
             .filter(|s| !s.is_empty() && s.len() < 500)
             .ok_or("Z.ai n’a pas créé de session d’autorisation")?
             .to_owned();
-        // A private loopback page replaces ZCode's application deep link. No
-        // authorization parameters are parsed or logged by this page.
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .map_err(|_| "Retour de connexion local indisponible")?;
-        let address = listener
-            .local_addr()
-            .map_err(|_| "Retour de connexion local indisponible")?;
-        let back = format!(
-            "{SITE}/app/oauth/login?{}",
-            url::form_urlencoded::Serializer::new(String::new())
-                .append_pair("redirect", &format!("http://{address}/complete"))
-                .finish()
-        );
-        let url = authorize_url(
-            data["authorize_url"].as_str().ok_or("Page Z.ai absente")?,
-            &back,
-        )?;
+        // The desktop landing page only accepts zcode://oauth/callback, never
+        // loopback URLs. Send the issuer directly to its server callback instead:
+        // that endpoint exchanges code/state and completes the private poll flow.
+        // No ZCode deep link, app-version impersonation or local token listener.
+        let url = authorize_url(data["authorize_url"].as_str().ok_or("Page Z.ai absente")?)?;
         let cancel = CancellationToken::new();
-        let callback_cancel = cancel.clone();
-        tokio::spawn(async move {
-            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            tokio::select! {_=callback_cancel.cancelled()=>{},_=tokio::time::sleep(Duration::from_secs(600))=>{},accepted=listener.accept()=>{if let Ok((mut socket,_))=accepted{let mut bytes=[0u8;4096];let _=tokio::time::timeout(Duration::from_secs(3),socket.read(&mut bytes)).await;let body="<!doctype html><meta charset=utf-8><title>Converge</title><p>Vous pouvez revenir dans Converge.</p>";let response=format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Security-Policy: default-src 'none'\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());let _=socket.write_all(response.as_bytes()).await;}}}
-        });
         let interval =
             Duration::from_secs(data["poll_interval_sec"].as_u64().unwrap_or(2).clamp(1, 10));
         let flow = Flow {
@@ -583,11 +566,7 @@ mod tests {
         .await
         .unwrap();
         assert!(data["flow_id"].is_string());
-        let url = authorize_url(
-            data["authorize_url"].as_str().unwrap(),
-            "https://zcode.z.ai/app/oauth/login",
-        )
-        .unwrap();
+        let url = authorize_url(data["authorize_url"].as_str().unwrap()).unwrap();
         println!(
             "Z.ai OAuth init accepted; authorization host: {}",
             url::Url::parse(&url).unwrap().host_str().unwrap()
@@ -595,14 +574,20 @@ mod tests {
     }
     #[test]
     fn rejects_external_authorization_hosts() {
-        assert!(authorize_url("https://evil.test/login", "http://localhost").is_err());
-        assert!(authorize_url("http://chat.z.ai/login", "http://localhost").is_err());
-        assert!(authorize_url(
-            "https://chat.z.ai/login?redirect_uri=old",
-            "https://zcode.z.ai/app/oauth/login"
-        )
-        .unwrap()
-        .contains("redirect_uri=https"));
+        assert!(authorize_url("https://evil.test/login").is_err());
+        assert!(authorize_url("http://chat.z.ai/login").is_err());
+        let url = url::Url::parse(&authorize_url(
+            "https://chat.z.ai/login?state=private-flow&redirect_uri=old&redirect_uri=duplicate"
+        ).unwrap()).unwrap();
+        let pairs = url.query_pairs().collect::<Vec<_>>();
+        assert_eq!(pairs.iter().filter(|(k, _)| k == "redirect_uri").count(), 1);
+        assert!(pairs
+            .iter()
+            .any(|(k, v)| k == "state" && v == "private-flow"));
+        assert!(pairs
+            .iter()
+            .any(|(k, v)| k == "redirect_uri"
+                && v == "https://zcode.z.ai/api/v1/oauth/cli/callback/zai"));
     }
     #[test]
     fn chooses_personal_project_without_granting_team_access() {

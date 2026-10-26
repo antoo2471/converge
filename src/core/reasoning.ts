@@ -25,6 +25,7 @@ export function effortLevels(
   model: string,
 ): readonly ReasoningEffort[] {
   if (!provider || provider.protocol === "comfyui") return [];
+  if (provider.plugin === "deepseek") return ["auto", "low", "high", "max"];
   if (provider.protocol === "cli")
     return ["claude-code", "grok", "antigravity"].includes(provider.plugin)
       ? reasoningLevels

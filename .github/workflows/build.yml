@@ -1,0 +1,124 @@
+name: Build desktop
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ''
+      release_id:
+        type: string
+        default: ''
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: false
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: node --test scripts/release-version.node-test.mjs
+      - run: npm run build
+
+  native:
+    needs: frontend
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            bundles: nsis
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            bundles: dmg
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: dmg
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            bundles: deb,appimage
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            bundles: deb,appimage
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+      - name: Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libssl-dev libdbus-1-dev libxcb1-dev libxrandr-dev libxkbcommon-dev libpipewire-0.3-dev libclang-dev libgbm-dev libegl-dev bubblewrap wmctrl
+      - run: npm ci
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+      - name: Configure bundle
+        env:
+          SIGN_UPDATES: ${{ inputs.release_id != '' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: node scripts/ci-bundle-config.mjs
+      - name: Build installers
+        if: inputs.release_id == ''
+        uses: tauri-apps/tauri-action@v1
+        with:
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config src-tauri/tauri.ci.conf.json
+      - name: Build and attach signed release
+        if: inputs.release_id != ''
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ inputs.release_id }}
+          includeUpdaterJson: true
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config src-tauri/tauri.ci.conf.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: converge-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.sig

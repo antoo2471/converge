@@ -23,6 +23,16 @@ export const zaiAuthAction = (
     action,
     loginId: loginId || null,
   });
+export const deepseekAuthAction = (
+  provider: Provider,
+  action: "status" | "start" | "poll" | "cancel" | "logout",
+  loginId?: string,
+) =>
+  invoke<ZaiAuthStatus>("deepseek_auth_action", {
+    provider,
+    action,
+    loginId: loginId || null,
+  });
 export interface CliProviderStatus {
   available: boolean;
   authenticated?: boolean;

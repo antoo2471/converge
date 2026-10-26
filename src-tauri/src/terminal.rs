@@ -139,6 +139,14 @@ pub async fn execute(
     result
 }
 fn select_shell<'a>(command: &str, requested: Option<&'a str>) -> Result<&'a str, String> {
+    #[cfg(unix)]
+    return match requested.unwrap_or("auto") {
+        "auto" | "sh" => Ok("auto"),
+        "bash" => Ok("bash"),
+        "zsh" => Ok("zsh"),
+        _ => Err("Interpréteur Unix attendu : auto, sh, bash ou zsh".into()),
+    };
+    #[cfg(windows)]
     match requested.unwrap_or("auto") {
         "cmd" => Ok("cmd"),
         "powershell" => Ok("powershell"),
@@ -298,6 +306,44 @@ fn isolated_with_options(
     struct FolderAccess {
         path: Vec<u16>,
         sid: PSID,
+        propagate: bool,
+    }
+    unsafe fn write_dacl(path: &[u16], acl: *mut ACL, propagate: bool) -> u32 {
+        if propagate {
+            SetNamedSecurityInfoW(
+                path.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                acl,
+                null(),
+            )
+        } else {
+            // MAXIMUM_ALLOWED explicitly disables SetSecurityInfo propagation.
+            // Ancestor metadata access must never walk the disk's descendants.
+            let handle = Handle(CreateFileW(
+                path.as_ptr(),
+                0x02000000,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                null(),
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS,
+                null_mut(),
+            ));
+            if handle.0 == INVALID_HANDLE_VALUE {
+                return 5;
+            }
+            SetSecurityInfo(
+                handle.0,
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                acl,
+                null(),
+            )
+        }
     }
     impl Drop for FolderAccess {
         fn drop(&mut self) {
@@ -321,15 +367,7 @@ fn isolated_with_options(
                     entry.Trustee.ptstrName = self.sid as _;
                     let mut updated = null_mut();
                     if SetEntriesInAclW(1, &entry, current, &mut updated) == 0 {
-                        SetNamedSecurityInfoW(
-                            self.path.as_ptr(),
-                            SE_FILE_OBJECT,
-                            DACL_SECURITY_INFORMATION,
-                            null_mut(),
-                            null_mut(),
-                            updated,
-                            null(),
-                        );
+                        write_dacl(&self.path, updated, self.propagate);
                         LocalFree(updated as _);
                     }
                     LocalFree(descriptor);
@@ -339,6 +377,54 @@ fn isolated_with_options(
     }
     struct Attributes {
         data: Vec<usize>,
+    }
+    unsafe fn grant_access(
+        path: &Path,
+        sid: PSID,
+        permissions: u32,
+        inherit: u32,
+    ) -> Result<FolderAccess, String> {
+        let path = wide(&path.to_string_lossy());
+        let (mut current, mut descriptor) = (null_mut(), null_mut());
+        let code = GetNamedSecurityInfoW(
+            path.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            &mut current,
+            null_mut(),
+            &mut descriptor,
+        );
+        if code != 0 {
+            return Err("Lecture des permissions du runtime impossible".into());
+        }
+        let mut entry: EXPLICIT_ACCESS_W = zeroed();
+        entry.grfAccessMode = GRANT_ACCESS;
+        entry.grfAccessPermissions = permissions;
+        entry.grfInheritance = inherit;
+        entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+        entry.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
+        entry.Trustee.ptstrName = sid as _;
+        let mut updated = null_mut();
+        let result = SetEntriesInAclW(1, &entry, current, &mut updated);
+        let result = if result == 0 {
+            write_dacl(&path, updated, inherit != 0)
+        } else {
+            result
+        };
+        if !updated.is_null() {
+            LocalFree(updated as _);
+        }
+        LocalFree(descriptor);
+        if result != 0 {
+            return Err("Accès au runtime impossible".into());
+        }
+        Ok(FolderAccess {
+            path,
+            sid,
+            propagate: inherit != 0,
+        })
     }
     impl Drop for Attributes {
         fn drop(&mut self) {
@@ -416,7 +502,86 @@ fn isolated_with_options(
         let _folder_access = FolderAccess {
             path: path.clone(),
             sid: profile.sid,
+            propagate: true,
         };
+        // Expose installed executable directories, never the home or disk root.
+        // These ACLs are read/execute-only and revoked with the unique sandbox SID.
+        let home =
+            std::env::var_os("USERPROFILE").and_then(|p| PathBuf::from(p).canonicalize().ok());
+        let mut _runtime_access = Vec::new();
+        // Runtime path resolution needs to stat/traverse ancestors. Grant no
+        // directory listing or file reads there, and do not inherit this ACE.
+        let mut ancestors = std::collections::HashSet::new();
+        for directory in
+            std::iter::once(root.to_path_buf()).chain(crate::host_environment::executable_paths())
+        {
+            for ancestor in directory.ancestors().skip(1) {
+                if ancestors.insert(ancestor.to_path_buf()) {
+                    if let Ok(access) = grant_access(
+                        ancestor,
+                        profile.sid,
+                        FILE_READ_ATTRIBUTES | FILE_TRAVERSE,
+                        0,
+                    ) {
+                        _runtime_access.push(access);
+                    }
+                }
+            }
+        }
+        let requested = command
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '_')
+            .map(|v| v.to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        let public_roots = ["ProgramFiles", "ProgramFiles(x86)", "SystemRoot"]
+            .iter()
+            .filter_map(|key| {
+                std::env::var_os(key).and_then(|p| PathBuf::from(p).canonicalize().ok())
+            })
+            .collect::<Vec<_>>();
+        for directory in crate::host_environment::executable_paths() {
+            if public_roots.iter().any(|root| directory.starts_with(root)) {
+                continue;
+            }
+            if directory.parent().is_none()
+                || home
+                    .as_ref()
+                    .is_some_and(|home| home == &directory || home.starts_with(&directory))
+            {
+                continue;
+            }
+            if [
+                "node.exe",
+                "npm.cmd",
+                "git.exe",
+                "python.exe",
+                "cargo.exe",
+                "rustc.exe",
+                "rg.exe",
+                "dotnet.exe",
+                "pnpm.cmd",
+                "yarn.cmd",
+            ]
+            .iter()
+            .any(|name| {
+                let stem = name.trim_end_matches(".exe").trim_end_matches(".cmd");
+                let needed = requested.iter().any(|word| {
+                    word == stem
+                        || word == name
+                        || (stem == "node"
+                            && ["npm", "npx", "pnpm", "yarn"].contains(&word.as_str()))
+                });
+                needed && directory.join(name).is_file()
+            }) {
+                if let Ok(access) = grant_access(
+                    &directory,
+                    profile.sid,
+                    FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                    SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+                ) {
+                    _runtime_access.push(access);
+                }
+            }
+        }
         let mut security: SECURITY_ATTRIBUTES = zeroed();
         security.nLength = size_of::<SECURITY_ATTRIBUTES>() as u32;
         security.bInheritHandle = 1;
@@ -489,13 +654,28 @@ fn isolated_with_options(
         startup.StartupInfo.hStdInput = input.0;
         let system = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into());
         let (executable, arguments) = if shell == "powershell" {
+            let program=crate::host_environment::powershell().ok_or("Le terminal PowerShell isolé nécessite PowerShell 7 récent (pwsh). Installez-le, puis relancez Converge. Les commandes cmd et Node restent disponibles.")?;
+            if let Some(directory) = program.parent() {
+                if !public_roots.iter().any(|root| directory.starts_with(root)) {
+                    _runtime_access.push(grant_access(
+                        directory,
+                        profile.sid,
+                        FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                        SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+                    )?);
+                }
+            }
             use base64::Engine;
-            let location = root.to_string_lossy().replace('\'', "''");
+            let location = root.to_string_lossy();
+            let location = location
+                .strip_prefix(r"\\?\")
+                .unwrap_or(&location)
+                .replace('\'', "''");
             let script = format!("[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); $ProgressPreference = 'SilentlyContinue'; $ErrorActionPreference = 'Stop'; New-PSDrive -Name Converge -PSProvider FileSystem -Root '{location}' | Out-Null; Set-Location Converge:\\; {command}");
             let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
             let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
             (
-                format!("{system}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"),
+                program.to_string_lossy().into_owned(),
                 format!(
                     "powershell.exe -NoLogo -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand {encoded}"
                 ),
@@ -527,10 +707,16 @@ fn isolated_with_options(
         }
         environment.insert(
             "PATH".into(),
-            format!("{system}\\System32;{system};C:\\Program Files\\nodejs"),
+            crate::host_environment::path_value()
+                .to_string_lossy()
+                .into_owned(),
         );
         environment.insert("TEMP".into(), root.to_string_lossy().to_string());
         environment.insert("TMP".into(), root.to_string_lossy().to_string());
+        environment.insert(
+            "NODE_OPTIONS".into(),
+            "--preserve-symlinks --preserve-symlinks-main".into(),
+        );
         let mut env: Vec<u16> = environment
             .iter()
             .flat_map(|(k, v)| format!("{k}={v}\0").encode_utf16().collect::<Vec<_>>())
@@ -631,7 +817,7 @@ fn isolated_with_options(
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         drop(job);
-        let text = String::from_utf8_lossy(&output);
+        let text = crate::host_environment::terminal_text(&output);
         if let Some(c) = &channel {
             let _ = c.send(json!({"type":"exit","code":exit,"cancelled":cancel.is_cancelled()}));
         }
@@ -645,21 +831,44 @@ fn isolated_with_options(
         }
     }
 }
-#[cfg(not(windows))]
+#[cfg(unix)]
+#[path = "terminal_unix.rs"]
+mod platform;
+#[cfg(unix)]
 fn isolated_with_options(
-    _root: &Path,
-    _command: &str,
-    _timeout: u64,
-    _cancel: CancellationToken,
-    _channel: Option<Channel<Value>>,
-    _read_only: bool,
-    _shell: &str,
+    root: &Path,
+    command: &str,
+    timeout: u64,
+    cancel: CancellationToken,
+    channel: Option<Channel<Value>>,
+    read_only: bool,
+    shell: &str,
 ) -> Result<String, String> {
-    Err("Ce binaire fournit l’isolation AppContainer sur Windows".into())
+    platform::run(root, command, timeout, cancel, channel, read_only, shell)
 }
 
 #[cfg(all(test, windows))]
 mod tests {
+    #[test]
+    fn installed_node_and_npm_are_available_inside_the_appcontainer() {
+        let root =
+            std::env::temp_dir().join(format!("converge-node-path-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let result = super::isolated_with_options(
+            &root,
+            "node --version && npm --version && echo NODE_NPM_PATH_OK",
+            30,
+            tokio_util::sync::CancellationToken::new(),
+            None,
+            true,
+            "cmd",
+        );
+        let resolved = root.canonicalize().unwrap();
+        assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+        let _ = std::fs::remove_dir_all(resolved);
+        let result = result.unwrap();
+        assert!(result.contains("NODE_NPM_PATH_OK"), "{result}");
+    }
     #[test]
     fn automatic_shell_preserves_powershell_semantics() {
         assert_eq!(
@@ -719,6 +928,24 @@ mod tests {
         std::fs::create_dir_all(inside.join("nested")).unwrap();
         std::fs::write(inside.join("nested/visible.txt"), "VISIBLE_NESTED").unwrap();
         let big = std::fs::File::create(inside.join("large.bin")).unwrap();
+        // A sparse file preserves the >512 MB regression without reserving it.
+        use std::os::windows::io::AsRawHandle;
+        let mut returned = 0;
+        assert_ne!(
+            unsafe {
+                windows_sys::Win32::System::IO::DeviceIoControl(
+                    big.as_raw_handle() as _,
+                    0x000900C4,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut returned,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
         big.set_len(600 * 1024 * 1024).unwrap();
         drop(big);
         let outside = base.join("private.txt");

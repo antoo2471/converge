@@ -1,6 +1,6 @@
 [package]
 name = "converge"
-version = "0.1.0"
+version = "26.10.1"
 description = "Universal AI desktop workspace"
 authors = ["Converge"]
 edition = "2021"
@@ -16,6 +16,8 @@ tauri-build = { version = "2", features = [] }
 similar = "2"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-global-shortcut = "2"
 tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -27,11 +29,21 @@ futures-util = "0.3"
 keyring = { version = "3", features = ["windows-native", "apple-native", "sync-secret-service"] }
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
+sha2 = "0.10"
+rmcp = { version = "3.7", default-features = false, features = ["client", "auth", "reqwest", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+reqwest13 = { package = "reqwest", version = "0.13", default-features = false, features = ["rustls", "json", "stream"] }
+async-trait = "0.1"
+serde_yaml = "0.9"
 url = "2"
 scraper = "0.24"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 pdf-extract = "0.10"
 zip = { version = "4", default-features = false, features = ["deflate"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+enigo = "0.6"
+xcap = "0.9"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Isolation", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_System_Memory", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_IO", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Gdi"] }

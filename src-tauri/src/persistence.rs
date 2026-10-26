@@ -237,7 +237,10 @@ pub fn save_provider(
     key: Option<String>,
 ) -> Result<(), String> {
     crate::providers::validate(&provider)?;
-    if (provider.plugin == "chatgpt" || provider.protocol == "cli" || crate::zai::oauth(&provider))
+    if (provider.plugin == "chatgpt"
+        || provider.protocol == "cli"
+        || crate::zai::oauth(&provider)
+        || crate::deepseek::oauth(&provider))
         && key.as_ref().is_some_and(|s| !s.is_empty())
     {
         return Err("Ce fournisseur utilise une connexion OAuth, pas une clé API".into());
@@ -304,6 +307,9 @@ pub async fn remove_provider(
         }
         if p.plugin == "zai" {
             crate::zai::remove(&app, &p.id)?;
+        }
+        if p.plugin == "deepseek" {
+            crate::deepseek::remove(&app, &p.id)?;
         }
     }
     match entry(&provider_id)?.delete_credential() {

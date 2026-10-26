@@ -45,6 +45,18 @@ export const toolGroups = [
       ["computer.scroll", "Faire défiler"],
     ],
   },
+  {
+    id: "extensions",
+    label: "Apps et skills",
+    description: "Utiliser les skills et les serveurs MCP ajoutés à Converge.",
+    tools: [
+      ["skills.read", "Charger les instructions d’un skill"],
+      ["mcp.list", "Découvrir les outils d’une app"],
+      ["mcp.call", "Utiliser un outil d’une app"],
+      ["mcp.read", "Lire les ressources d’une app"],
+      ["mcp.prompt", "Charger les prompts d’une app"],
+    ],
+  },
 ] as const;
 export const allTools = toolGroups.flatMap((group) =>
   group.tools.map(([name]) => name),
@@ -60,11 +72,37 @@ export function setTools(
 }
 /** Apply the user's new default once; preserve later opt-outs across restarts. */
 export function migrateToolDefaults(settings: Settings): Settings {
+  if ((settings.toolDefaultsVersion || 0) >= 3) return settings;
+  const previous = migratePreviousToolDefaults(settings);
+  return {
+    ...previous,
+    toolDefaultsVersion: 3,
+    enabledTools: previous.enabledTools.length
+      ? [
+          ...new Set([
+            ...previous.enabledTools,
+            ...toolGroups
+              .find((g) => g.id === "extensions")!
+              .tools.map(([name]) => name),
+          ]),
+        ]
+      : [],
+  };
+}
+function migratePreviousToolDefaults(settings: Settings): Settings {
   if (settings.toolDefaultsVersion === 2) return settings;
   if (settings.toolDefaultsVersion === 1) {
     const enabled = settings.enabledTools;
-    const previousComputer = toolGroups.find(g => g.id === "computer")!.tools.filter(([name]) => name !== "computer.actions");
-    return { ...settings, toolDefaultsVersion: 2, enabledTools: previousComputer.every(([name]) => enabled.includes(name)) ? [...new Set([...enabled, "computer.actions"])] : enabled };
+    const previousComputer = toolGroups
+      .find((g) => g.id === "computer")!
+      .tools.filter(([name]) => name !== "computer.actions");
+    return {
+      ...settings,
+      toolDefaultsVersion: 2,
+      enabledTools: previousComputer.every(([name]) => enabled.includes(name))
+        ? [...new Set([...enabled, "computer.actions"])]
+        : enabled,
+    };
   }
   return { ...settings, toolDefaultsVersion: 2, enabledTools: [...allTools] };
 }

@@ -71,6 +71,14 @@ export const providerPresets = {
     install: "https://opencode.ai/docs/go/",
     models: [] as string[],
   },
+  deepseek: {
+    name: "DeepSeek",
+    command: "",
+    url: "https://api.deepseek.com",
+    description: "Connectez votre compte DeepSeek ou utilisez votre clé API.",
+    install: "https://platform.deepseek.com/api_keys",
+    models: [] as string[],
+  },
 } as const;
 export type PresetId = keyof typeof providerPresets;
 export const isPreset = (plugin: string): plugin is PresetId =>
@@ -84,7 +92,11 @@ export function newPresetProvider(plugin: PresetId): Provider {
     id: id(),
     name: preset.name,
     plugin: plugin as ProviderPluginId,
-    protocol: (cli ? "cli" : "openai") as Protocol,
+    protocol: (cli
+      ? "cli"
+      : plugin === "deepseek"
+        ? "anthropic"
+        : "openai") as Protocol,
     url: preset.url,
     headers: {},
     models: [...preset.models],
@@ -93,11 +105,19 @@ export function newPresetProvider(plugin: PresetId): Provider {
       vision: plugin === "claude-code",
       tools: true,
       images: false,
-      context: 32768,
+      context: plugin === "deepseek" ? 1_000_000 : 32768,
     },
     ...(cli ? { request: { cli: {} } } : {}),
     ...(plugin === "zai"
       ? { request: { zai: { authMode: "oauth" as const } } }
+      : {}),
+    ...(plugin === "deepseek"
+      ? {
+          request: {
+            deepseek: { authMode: "oauth" as const },
+            chatPath: "anthropic/v1/messages",
+          },
+        }
       : {}),
   };
 }

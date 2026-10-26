@@ -17,10 +17,29 @@ vi.mock("../lib/native", () => ({
   cliProviderAction: vi.fn(),
   discover: vi.fn(),
   openExternal: vi.fn(),
+  deepseekAuthAction: vi.fn().mockResolvedValue({ state: "disconnected" }),
 }));
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+it("configures DeepSeek by API key without retaining the OAuth transport or exporting the key", async () => {
+  vi.mocked(api.discover).mockResolvedValue(["deepseek-flash"]);
+  const save = vi.fn().mockResolvedValue(undefined);
+  render(<AppDialogs><AccountProviderEditor plugin="deepseek" existing={null} onClose={() => {}} onSave={save} /></AppDialogs>);
+  await screen.findByRole("button", { name: "Se connecter avec DeepSeek" });
+  expect(api.openExternal).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Clé API" }));
+  fireEvent.change(screen.getByLabelText("Clé API"), { target: { value: "test-secret" } });
+  fireEvent.click(screen.getByRole("button", { name: "Actualiser" }));
+  await screen.findByText(/1 modèle reçu/);
+  fireEvent.click(screen.getByRole("button", { name: "Enregistrer la connexion" }));
+  await waitFor(() => expect(save).toHaveBeenCalled());
+  const [provider, key] = save.mock.calls[0];
+  expect(provider).toMatchObject({ plugin: "deepseek", url: "https://api.deepseek.com", protocol: "openai", models: ["deepseek-flash"], request: { deepseek: { authMode: "api-key" } } });
+  expect(provider.request.chatPath).toBeUndefined();
+  expect(key).toBe("test-secret");
+  expect(JSON.stringify(importedWorkspace.parse({ version: 1, providers: [provider], conversations: [], projects: [], images: [] }))).not.toContain("test-secret");
 });
 
 it.each(Object.keys(providerPresets))(

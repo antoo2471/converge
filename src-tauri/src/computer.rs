@@ -324,7 +324,10 @@ fn action_only(name: &str, args: &Value, session: &mut Session) -> Result<String
                     }
                     let mut title = [0u16; 1024];
                     let len = GetWindowTextW(hwnd, title.as_mut_ptr(), 1024);
-                    if len > 0 {
+                    if len > 0
+                        && String::from_utf16_lossy(&title[..len as usize])
+                            != "Converge computer control"
+                    {
                         let list = &mut *(param as *mut Vec<Value>);
                         let mut rect: RECT = std::mem::zeroed();
                         GetWindowRect(hwnd, &mut rect);
@@ -476,6 +479,12 @@ fn action_only(name: &str, args: &Value, session: &mut Session) -> Result<String
             }
             "computer.key" => {
                 let key = args["key"].as_str().ok_or("key manquant")?;
+                if key
+                    .split('+')
+                    .any(|part| matches!(part.to_ascii_lowercase().as_str(), "escape" | "esc"))
+                {
+                    return Err("Échap est réservé à la reprise manuelle du contrôle".into());
+                }
                 let codes = key
                     .split('+')
                     .map(|k| match k.to_lowercase().as_str() {
@@ -577,14 +586,17 @@ fn action_only(name: &str, args: &Value, session: &mut Session) -> Result<String
         }
     }
 }
-#[cfg(not(windows))]
+#[cfg(unix)]
+#[path = "computer_unix.rs"]
+mod platform;
+#[cfg(unix)]
 pub fn execute(
-    _name: &str,
-    _args: &Value,
-    _session: &mut Session,
-    _cancel: &tokio_util::sync::CancellationToken,
+    name: &str,
+    args: &Value,
+    session: &mut Session,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<String, String> {
-    Err("L’adaptateur Computer Use de cette distribution cible Windows".into())
+    platform::execute(name, args, session, cancel)
 }
 
 #[cfg(test)]
