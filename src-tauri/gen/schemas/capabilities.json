@@ -1,0 +1,1 @@
+{"main":{"identifier":"main","description":"Only the trusted application shell can invoke native commands.","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-minimize","core:window:allow-toggle-maximize","core:window:allow-close","core:window:allow-start-dragging","dialog:allow-open","dialog:allow-save"]}}

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Converge",
+  "version": "0.1.0",
+  "identifier": "app.converge.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Converge",
+        "decorations":false,
+        "dragDropEnabled":false,
+        "width": 1380,
+        "height": 900,
+        "minWidth": 780,
+        "minHeight": 600,
+        "backgroundColor": "#151210"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src ipc: http://ipc.localhost; frame-src 'self' blob: http://artifact.localhost https://artifact.localhost artifact:; object-src 'none'; base-uri 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "shortDescription": "Every AI. One space.",
+    "category": "Productivity"
+  }
+}

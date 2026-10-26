@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-25T02:21:01.837Z",
+  "title": "Design System: Converge",
+  "extensions": {
+    "shadows": [
+      {
+        "name": "overlay",
+        "value": "0 24px 90px #0008",
+        "purpose": "Menus et panneaux superposés"
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "compact",
+        "value": "1100px"
+      },
+      {
+        "name": "narrow",
+        "value": "850px"
+      }
+    ],
+    "typographyMeta": {
+      "display": {
+        "displayName": "Manrope",
+        "purpose": "Titres compacts à forte personnalité"
+      }
+    }
+  },
+  "components": [],
+  "narrative": {
+    "northStar": "Un espace immersif et chaleureux",
+    "overview": "Refonte explicitement demandée à partir des captures utilisateur de son application musicale.",
+    "rules": [
+      {
+        "name": "Connexions choisies",
+        "body": "Aucun fournisseur préconfiguré.",
+        "section": "layout"
+      }
+    ],
+    "dos": [
+      "Utiliser les conversations réelles.",
+      "Préserver la lisibilité des contrôles."
+    ],
+    "donts": [
+      "Ne pas recréer un accueil marketing centré."
+    ]
+  }
+}

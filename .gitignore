@@ -8,6 +8,13 @@ target/
 
 # MSVC Windows builds of rustc generate these, which store debugging information
 *.pdb
+node_modules/
+dist/
+src/generated/
+.impeccable/cache/
+.impeccable/codex-schema/
+*.log
+*.tsbuildinfo
 
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
