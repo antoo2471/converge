@@ -1,0 +1,33 @@
+; macOS process bootstrap, not filesystem or network access to user data.
+; Operations checked against the restricted platform defaults in:
+; https://github.com/openai/codex/tree/main/codex-rs/sandboxing/src
+(version 1)
+(deny default)
+(allow process-exec)
+(allow process-fork)
+(allow process-info* (target same-sandbox))
+(allow signal (target same-sandbox))
+(allow sysctl-read)
+(allow file-read-metadata)
+
+; dyld needs executable mappings in addition to read access. Without these,
+; sandbox-exec can start but the kernel kills the shell before its first line.
+(allow file-read* file-map-executable
+  (subpath "/System") (subpath "/usr")
+  (subpath "/bin") (subpath "/sbin") (subpath "/Library/Apple"))
+; getcwd needs the root vnode; this is not recursive access to the disk.
+(allow file-read* (literal "/"))
+(allow file-read* (literal "/private/etc/passwd")
+  (literal "/private/etc/localtime") (subpath "/private/var/db/timezone"))
+(allow file-read* file-write-data
+  (literal "/dev/null") (literal "/dev/zero"))
+(allow file-read* (literal "/dev/random") (literal "/dev/urandom"))
+(allow file-read-data file-write-data (subpath "/dev/fd"))
+; Only named OS bootstrap services; no general Mach IPC or network allowance.
+(allow mach-lookup
+  (global-name "com.apple.secinitd")
+  (global-name "com.apple.system.opendirectoryd.libinfo")
+  (global-name "com.apple.system.logger"))
+(allow system-mac-syscall (mac-policy-name "vnguard"))
+(allow system-mac-syscall
+  (require-all (mac-policy-name "Sandbox") (mac-syscall-number 67)))

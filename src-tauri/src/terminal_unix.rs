@@ -148,15 +148,15 @@ pub(super) fn run(
                     .into(),
             );
         }
-        let mut policy = String::from("(version 1)(deny default)(allow process-exec)(allow process-fork)(allow sysctl-read)(allow file-read-metadata)(allow signal (target same-sandbox))(allow file-read* (subpath \"/System\") (subpath \"/usr\") (subpath \"/bin\") (subpath \"/sbin\") (subpath \"/Library/Apple\") (literal \"/dev/null\") (literal \"/dev/random\") (literal \"/dev/urandom\"))");
+        let mut policy = String::from(include_str!("terminal_macos.sbpl"));
         for path in &runtime_dirs {
             policy.push_str(&format!(
-                "(allow file-read* (subpath \"{}\"))",
+                "(allow file-read* file-map-executable (subpath \"{}\"))",
                 quoted(path)
             ));
         }
         policy.push_str(&format!(
-            "(allow file-read* (subpath \"{}\"))(allow file-read* file-write* (subpath \"{}\"))",
+            "(allow file-read* file-map-executable (subpath \"{}\"))(allow file-read* file-write* file-map-executable (subpath \"{}\"))",
             quoted(root),
             quoted(&temp)
         ));
@@ -213,8 +213,7 @@ pub(super) fn run(
     drop(sender);
     let started = Instant::now();
     let mut output = Vec::new();
-    let mut status = None;
-    loop {
+    let status = loop {
         if let Ok(bytes) = receiver.recv_timeout(Duration::from_millis(20)) {
             if let Some(channel) = &channel {
                 let _ =
@@ -239,10 +238,9 @@ pub(super) fn run(
             .into());
         }
         if let Ok(Some(exit)) = child.try_wait() {
-            status = Some(exit);
-            break;
+            break exit;
         }
-    }
+    };
     // Close any surviving children before joining readers, including background jobs.
     unsafe {
         libc::kill(-(pid as i32), libc::SIGKILL);
@@ -256,13 +254,17 @@ pub(super) fn run(
     for reader in readers {
         let _ = reader.join();
     }
-    let status = status.unwrap();
     let code = status.code().unwrap_or(-1);
+    use std::os::unix::process::ExitStatusExt;
+    let termination = status
+        .signal()
+        .map(|signal| format!("signal {signal}"))
+        .unwrap_or_else(|| code.to_string());
     if let Some(channel) = &channel {
         let _ = channel.send(json!({"type":"exit","code":code}));
     }
     let text = format!(
-        "{}\n[Exit: {code} · {interpreter} · {} ms · {isolation} · réseau désactivé · {}]",
+        "{}\n[Exit: {termination} · {interpreter} · {} ms · {isolation} · réseau désactivé · {}]",
         crate::host_environment::terminal_text(&output),
         started.elapsed().as_millis(),
         if read_only {
@@ -289,7 +291,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(base.join("private.txt"), "PRIVATE_SENTINEL").unwrap();
         std::fs::write(root.join("visible.txt"), "VISIBLE").unwrap();
-        let output=run(&root,"node --version; cat visible.txt; if cat ../private.txt 2>/dev/null; then exit 2; fi; if echo BAD > blocked.txt 2>/dev/null; then exit 3; fi; echo ISOLATION_OK",30,CancellationToken::new(),None,true,"sh").unwrap();
+        let output=run(&root,"set -eu; node --version; cat visible.txt; if cat ../private.txt 2>/dev/null; then exit 2; fi; if echo BAD > blocked.txt 2>/dev/null; then exit 3; fi; echo ISOLATION_OK",30,CancellationToken::new(),None,true,"sh").unwrap();
         assert!(output.contains("ISOLATION_OK"), "{output}");
         assert!(output.contains("VISIBLE"));
         assert!(!output.contains("PRIVATE_SENTINEL"));
