@@ -510,6 +510,23 @@ async fn stream_chat_inner(
     request: Request,
     on_event: Channel<Value>,
 ) -> Result<(), String> {
+    stream_chat_with_credentials(state, request, on_event, provider_credentials).await
+}
+fn provider_credentials(provider: &Provider) -> Result<Secret, String> {
+    if crate::zai::oauth(provider) {
+        crate::zai::credentials(provider)
+    } else if crate::deepseek::oauth(provider) {
+        crate::deepseek::credentials(provider)
+    } else {
+        secret(&provider.id)
+    }
+}
+async fn stream_chat_with_credentials(
+    state: &AppState,
+    request: Request,
+    on_event: Channel<Value>,
+    credentials: impl FnOnce(&Provider) -> Result<Secret, String>,
+) -> Result<(), String> {
     if uuid::Uuid::parse_str(&request.id).is_err() {
         return Err("Identifiant de requête invalide".into());
     }
@@ -546,7 +563,7 @@ async fn stream_chat_inner(
         requests.insert(request_key.clone(), token.clone());
     }
     let result=async {
-        let s=if crate::zai::oauth(&p){crate::zai::credentials(&p)?}else if crate::deepseek::oauth(&p){crate::deepseek::credentials(&p)?}else{secret(&p.id)?};
+        let s=credentials(&p)?;
         let messages=normalized(&request.messages,&p.protocol);
         let (path,mut body)=match p.protocol.as_str(){
             "ollama"=>("api/chat",json!({"model":request.model,"messages":messages,"stream":true,"options":{"temperature":request.temperature,"num_predict":request.max_tokens}})),
@@ -643,6 +660,20 @@ async fn generate_image_inner(
     size: String,
     image: Option<String>,
 ) -> Result<Vec<String>, String> {
+    generate_image_with_credentials(state, provider_id, model, prompt, size, image, |p| {
+        secret(&p.id)
+    })
+    .await
+}
+async fn generate_image_with_credentials(
+    state: &AppState,
+    provider_id: String,
+    model: String,
+    prompt: String,
+    size: String,
+    image: Option<String>,
+    credentials: impl FnOnce(&Provider) -> Result<Secret, String>,
+) -> Result<Vec<String>, String> {
     let p = provider(&state, &provider_id)?;
     validate(&p)?;
     if p.capabilities["images"] != true {
@@ -660,6 +691,7 @@ async fn generate_image_inner(
     if p.protocol != "openai" {
         return Err("Utilisez un endpoint d’images compatible OpenAI ou ComfyUI".into());
     }
+    let credentials = credentials(&p)?;
     let request = if let Some(data) = image {
         let (_, data) = data.split_once(',').ok_or("Image de référence invalide")?;
         let bytes = base64::engine::general_purpose::STANDARD
@@ -682,14 +714,14 @@ async fn generate_image_inner(
         auth(
             state.client.post(endpoint(&p, "images/edits")),
             &p,
-            &secret(&p.id)?,
+            &credentials,
         )?
         .multipart(form)
     } else {
         auth(
             state.client.post(endpoint(&p, "images/generations")),
             &p,
-            &secret(&p.id)?,
+            &credentials,
         )?
         .json(
             &json!({"model":model,"prompt":prompt,"n":1,"size":size,"response_format":"b64_json"}),
@@ -1047,7 +1079,9 @@ mod tests {
             AppState {
                 db: std::sync::Mutex::new(db),
                 client: reqwest::Client::builder()
+                    .no_proxy()
                     .redirect(reqwest::redirect::Policy::none())
+                    .timeout(std::time::Duration::from_secs(10))
                     .build()
                     .unwrap(),
                 requests: std::sync::Mutex::new(Default::default()),
@@ -1060,6 +1094,84 @@ mod tests {
             id,
         )
     }
+    fn contract_credentials(_: &Provider) -> Result<Secret, String> {
+        Ok(Secret {
+            key: "contract-test-key".into(),
+            headers: Default::default(),
+        })
+    }
+    #[tokio::test]
+    async fn credential_failure_stops_before_http_and_cleans_up_the_request() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (state, provider_id) = state_for(
+            "openai",
+            format!("http://{}", listener.local_addr().unwrap()),
+        );
+        let (channel, _) = channel();
+        let request = Request {
+            id: uuid::Uuid::new_v4().to_string(),
+            provider_id: provider_id.clone(),
+            model: "contract-model".into(),
+            messages: vec![],
+            temperature: 0.7,
+            max_tokens: 512,
+            reasoning_effort: None,
+            tools_enabled: None,
+            conversation_id: None,
+        };
+        let error = super::stream_chat_with_credentials(&state, request, channel, |_| {
+            Err("Vault unavailable".into())
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error, "Vault unavailable");
+        assert!(state.requests.lock().unwrap().is_empty());
+        let error = super::generate_image_with_credentials(
+            &state,
+            provider_id,
+            "contract-model".into(),
+            "Test".into(),
+            "1024x1024".into(),
+            None,
+            |_| Err("Vault unavailable".into()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error, "Vault unavailable");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "No HTTP request may be sent when credentials are unavailable"
+        );
+    }
+    async fn stream_contract(
+        state: &AppState,
+        request: Request,
+        channel: Channel<Value>,
+    ) -> Result<(), String> {
+        // Protocol tests use a real loopback HTTP server, not the host keychain.
+        super::stream_chat_with_credentials(state, request, channel, contract_credentials).await
+    }
+    async fn image_contract(
+        state: &AppState,
+        provider: String,
+        model: String,
+        prompt: String,
+        size: String,
+        image: Option<String>,
+    ) -> Result<Vec<String>, String> {
+        super::generate_image_with_credentials(
+            state,
+            provider,
+            model,
+            prompt,
+            size,
+            image,
+            contract_credentials,
+        )
+        .await
+    }
     async fn fixture(
         body: String,
         delay: bool,
@@ -1068,6 +1180,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let task = tokio::spawn(async move {
+            tokio::time::timeout(std::time::Duration::from_secs(20),async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut data = vec![];
             let header_end;
@@ -1109,6 +1222,7 @@ mod tests {
                 }
             }
             (header, data[header_end..].to_vec())
+            }).await.expect("Le serveur HTTP de test n’a pas reçu/terminé sa requête en 20 secondes")
         });
         (url, task)
     }
@@ -1137,7 +1251,7 @@ mod tests {
             ("responses","data: {\"type\":\"response.output_text.delta\",\"delta\":\"été\"}\n\ndata: {\"type\":\"response.completed\"}\n\n","/responses"),
         ]{
             let(url,server)=fixture(body.into(),false).await;let(state,pid)=state_for(protocol,url);let(channel,events)=channel();
-            stream_chat_inner(&state,Request{conversation_id:None,id:uuid::Uuid::new_v4().to_string(),provider_id:pid,model:"contract-model".into(),messages:vec![json!({"role":"user","content":"Bonjour"})],temperature:0.7,max_tokens:512,reasoning_effort:None,tools_enabled:None},channel).await.unwrap();
+            stream_contract(&state,Request{conversation_id:None,id:uuid::Uuid::new_v4().to_string(),provider_id:pid,model:"contract-model".into(),messages:vec![json!({"role":"user","content":"Bonjour"})],temperature:0.7,max_tokens:512,reasoning_effort:None,tools_enabled:None},channel).await.unwrap();
             let(header,body)=server.await.unwrap();assert!(header.starts_with(&format!("POST {path} ")),"{header}");let request:Value=serde_json::from_slice(&body).unwrap();assert_eq!(request["stream"],true);assert_eq!(request["model"],"contract-model");assert!(request["tools"].is_array());if protocol=="responses"{assert!(request["input"].is_array());assert!(request.get("messages").is_none());assert_eq!(request["tools"][0]["type"],"function");}
             let events=events.lock().unwrap();assert!(events.iter().any(|v|v["type"]=="delta"&&v["text"]=="été"),"{events:?}");assert_eq!(events.last().unwrap()["type"],"done");assert!(state.requests.lock().unwrap().is_empty());
         }
@@ -1175,7 +1289,7 @@ mod tests {
                 .1
                 .cancel()
         };
-        let (result, _) = tokio::join!(stream_chat_inner(&state, request, channel), cancel);
+        let (result, _) = tokio::join!(stream_contract(&state, request, channel), cancel);
         result.unwrap();
         server.abort();
         assert_eq!(events.lock().unwrap().last().unwrap()["cancelled"], true);
@@ -1190,7 +1304,7 @@ mod tests {
         .await;
         let (state, pid) = state_for("openai", url);
         let (channel, events) = channel();
-        let result = stream_chat_inner(
+        let result = stream_contract(
             &state,
             Request {
                 conversation_id: None,
@@ -1221,7 +1335,7 @@ mod tests {
             let (url, server) =
                 fixture(json!({"data":[{"b64_json":expected}]}).to_string(), false).await;
             let (state, pid) = state_for("openai", url);
-            let images = generate_image_inner(
+            let images = image_contract(
                 &state,
                 pid,
                 "contract-model".into(),
@@ -1233,6 +1347,7 @@ mod tests {
             .unwrap();
             assert_eq!(images.len(), 1);
             let (header, body) = server.await.unwrap();
+            assert!(header.contains("contract-test-key"));
             if edit {
                 assert!(header.starts_with("POST /images/edits "));
                 assert!(header.contains("multipart/form-data"));

@@ -33,3 +33,10 @@ Publication :
 - Configurer TAURI_SIGNING_PRIVATE_KEY depuis ~/.converge-release/updater.key ; ce fichier privé reste hors du dépôt et son contenu n’a jamais été affiché.
 - Pousser les changements puis lancer Publish release. Le secret est vérifié avant allocation du numéro. Procédure : docs/releases.md.
 - Le disque plein a été débloqué par cargo clean sur les seuls fichiers générés du projet, puis l’utilisateur a confirmé avoir libéré de l’espace. Les tests utilisent désormais un fichier sparse.
+Correctif CI Ubuntu (27 octobre 2026) :
+- Windows x64/ARM64 et macOS Intel/Apple Silicon ont réussi le workflow 40412498291 (commit4bedc3a). Les deux jobs Ubuntu restent bloqués dans la suite de tests de ce commit.
+- Tests HTTP découplés du coffre OS avec identifiants de fixture explicites ; le chemin de production garde ses erreurs de coffre. Test de non-envoi HTTP si le coffre est indisponible ajouté.
+- Serveur HTTP de fixture borné à20s, client10s, proxies host exclus uniquement dans ces tests ; résultat fournisseur ciblé21 tests passés/2 opt-in ignorés.
+- Préflight bwrap réel en CI, profil AppArmor userns ciblé sur le binaire installé si nécessaire ; aucun sysctl global désactivé, réseau toujours isolé. Étape Rust bornée20min avec sorties de panic immédiates.
+- YAML et syntaxe bash du préflight validés. Nouvelle suite Rust complète en cours, session46003 ; pas de push/commit effectué.
+Validation finale du correctif Ubuntu : suite Rust locale complète74 réussis,0 échec,12 opt-in ignorés. Correctif local prêt à pousser ; validation native Ubuntu attendue sur le prochain workflow.

@@ -86,10 +86,30 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libssl-dev libdbus-1-dev libxcb1-dev libxrandr-dev libxkbcommon-dev libpipewire-0.3-dev libclang-dev libgbm-dev libegl-dev bubblewrap wmctrl
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libssl-dev libdbus-1-dev libxcb1-dev libxrandr-dev libxkbcommon-dev libpipewire-0.3-dev libclang-dev libgbm-dev libegl-dev bubblewrap wmctrl apparmor
+      - name: Verify Linux namespace isolation
+        if: runner.os == 'Linux'
+        timeout-minutes: 2
+        run: |
+          if ! bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev /bin/true; then
+            if [ -r /sys/module/apparmor/parameters/enabled ] && [ "$(cat /sys/module/apparmor/parameters/enabled)" = Y ]; then
+              # Scoped to bwrap on this disposable runner, keeping the global
+              # AppArmor restriction and the isolated network namespace.
+              sudo tee /etc/apparmor.d/converge-ci-bwrap > /dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+              sudo apparmor_parser -r /etc/apparmor.d/converge-ci-bwrap
+            fi
+          fi
+          bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev /bin/true
       - run: npm ci
       - name: Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+        timeout-minutes: 20
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib -- --nocapture
       - name: Configure bundle
         env:
           SIGN_UPDATES: ${{ inputs.release_id != '' }}

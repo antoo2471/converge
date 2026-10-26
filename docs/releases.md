@@ -53,4 +53,8 @@ Le dépôt doit être accessible sans authentification pour que les clients inst
 
 ## Vérifications de distribution
 
+Les runners Ubuntu n’ont pas besoin de coffre de bureau pour les tests de transport : ces tests injectent une clé de fixture et communiquent avec un vrai serveur HTTP local. Les accès au coffre restent obligatoires dans le chemin de production, et un test vérifie qu’une erreur de coffre bloque tout envoi.
+
+Avant les tests Linux, le workflow vérifie réellement la création des namespaces bubblewrap. Si AppArmor Ubuntu 24.04 la bloque, il charge un profil limité à `/usr/bin/bwrap` sur le runner éphémère. La restriction globale AppArmor et l’isolation réseau sont conservées. Un échec de ce contrôle arrête le job avant les tests. Les échanges HTTP de test et l’étape Rust ont aussi des délais limites.
+
 Les tests frontend, les tests Rust et le packaging sont des étapes bloquantes. Les tests qui contrôlent réellement le bureau restent opt-in et utilisent une fenêtre jetable. Une machine Windows ne valide pas l’exécution native de macOS ou de Linux : consultez les six jobs avant de publier. Les signatures, la présence du manifeste updater et un essai d’installation sur chaque OS restent nécessaires pour valider une distribution finale.
