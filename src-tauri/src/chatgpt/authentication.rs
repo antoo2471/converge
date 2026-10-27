@@ -52,14 +52,16 @@ pub(super) fn open_browser(url: &str) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
-        std::process::Command::new(if cfg!(target_os = "macos") {
+        let mut command = std::process::Command::new(if cfg!(target_os = "macos") {
             "open"
         } else {
             "xdg-open"
-        })
-        .arg(url)
-        .spawn()
-        .map_err(|_| "Impossible d’ouvrir le navigateur")?;
+        });
+        super::system_process::prepare(&mut command);
+        command
+            .arg(url)
+            .spawn()
+            .map_err(|_| "Impossible d’ouvrir le navigateur")?;
     }
     Ok(())
 }
