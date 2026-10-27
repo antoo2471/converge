@@ -8,6 +8,8 @@ La connexion utilise exclusivement un profil OAuth Converge. La session Chat gra
 
 L’App Server privé utilise un CODEX_HOME propre à la connexion et cli_auth_credentials_store="keyring". Le CLI réalise le callback OAuth, conserve les identifiants dans le coffre système et gère leur renouvellement. Converge ne lit ni ne copie les tokens. Les modèles et efforts sont découverts via model/list ; ce catalogue ne garantit pas les droits d’accès. Les limites exposées viennent de account/rateLimits/read.
 
+Sous Linux, les processus Codex et navigateur n’héritent pas des entrées de `LD_LIBRARY_PATH` situées dans le `APPDIR` de Converge. Cela évite que le lanceur Node du CLI ou `xdg-open` charge les bibliothèques de l’AppImage à la place de celles du système. Les chemins personnalisés hors de ce dossier restent conservés et l’environnement de Converge lui-même n’est pas modifié.
+
 ## Conversation et outils
 
 Converge conserve l’historique durable dans SQLite. Chaque requête utilise un thread Codex éphémère avec le contexte choisi. Branches, exclusions et changements de modèle restent maîtrisés par Converge ; aucun historique caché ne s’accumule dans un thread antérieur. La reprise après redémarrage utilise les messages locaux, sans restaurer le raisonnement interne du CLI.

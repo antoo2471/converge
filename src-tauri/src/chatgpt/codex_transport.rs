@@ -29,6 +29,9 @@ impl CodexTransport {
         std::fs::create_dir_all(cwd)
             .map_err(|_| "Impossible de préparer le dossier privé Codex")?;
         let mut cmd = Command::new(binary);
+        // npm-installed Codex starts through the host's Node runtime, which must
+        // use host libraries rather than those bundled for Converge's WebView.
+        super::system_process::prepare(cmd.as_std_mut());
         cmd.arg("app-server")
             .arg("--listen")
             .arg("stdio://")

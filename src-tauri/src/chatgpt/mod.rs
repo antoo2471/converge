@@ -3,6 +3,7 @@ mod capabilities;
 mod codex_transport;
 mod models;
 mod response;
+mod system_process;
 use crate::{persistence::Provider, AppState};
 use codex_transport::CodexTransport;
 use serde_json::{json, Value};
